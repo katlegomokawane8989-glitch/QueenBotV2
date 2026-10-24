@@ -1,0 +1,122 @@
+const fs = require("fs-extra");
+const path = require("path");
+
+const DATA_DIR = path.join(__dirname, "pendingData");
+const DATA_FILE = path.join(DATA_DIR, "groups.json");
+const SUPPORT_GC = "1496599381339519";
+
+function loadGroups() {
+	try {
+		if (!fs.existsSync(DATA_FILE))
+			return [];
+		return fs.readJsonSync(DATA_FILE);
+	} catch {
+		return [];
+	}
+}
+
+function saveGroups(groups) {
+	fs.ensureDirSync(DATA_DIR);
+	fs.writeJsonSync(DATA_FILE, groups, { spaces: 2 });
+}
+
+module.exports = {
+	config: {
+		name: "pending",
+		aliases: ["pend"],
+		version: "4.0.0",
+		author: "lonely",
+		countDown: 5,
+		role: 2,
+		shortDescription: {
+			en: "Manage pending group approvals"
+		},
+		description: {
+			en: "Lists groups awaiting approval."
+		},
+		category: "owner"
+	},
+
+	onStart: async function ({ api, event }) {
+		try {
+			const threads = await api.getThreadList(
+				100,
+				null,
+				["PENDING", "OTHER"]
+			);
+
+			const groups = (threads || []).filter(thread =>
+				thread.isGroup === true ||
+				(thread.participantIDs &&
+					thread.participantIDs.length > 2)
+			);
+
+			const saved = loadGroups();
+
+			for (const group of groups) {
+				const tid = String(group.threadID);
+
+				if (tid === SUPPORT_GC)
+					continue;
+
+				const existing = saved.find(item => item.tid === tid);
+
+				if (!existing) {
+					saved.push({
+						tid,
+						name: group.name || "Unnamed Group",
+						inviter: "Unknown",
+						status: "pending",
+						addedAt: Date.now()
+					});
+				} else {
+					existing.name = group.name || existing.name;
+				}
+			}
+
+			saveGroups(saved);
+
+			const pending = saved.filter(item =>
+				item.status === "pending"
+			);
+
+			if (!pending.length) {
+				return api.sendMessage(
+					"╭─「 PENDING GROUPS 」\n" +
+					"│\n" +
+					"│ No recorded pending groups.\n" +
+					"│\n" +
+					"╰────────────",
+					event.threadID
+				);
+			}
+
+			let message = "╭─「 PENDING GROUPS 」\n│\n";
+
+			pending.forEach((group, index) => {
+				message +=
+					`│ ${index + 1}. ${group.name}\n` +
+					`│ TID: ${group.tid}\n` +
+					`│ Added by: ${group.inviter}\n` +
+					`│\n`;
+			});
+
+			message +=
+				`│ Total: ${pending.length}\n` +
+				"│\n" +
+				"│ Approve: ?add 1\n" +
+				"│ Or: ?add GROUP_TID\n" +
+				"╰────────────";
+
+			return api.sendMessage(message, event.threadID);
+		} catch (error) {
+			console.error("pending.js:", error);
+
+			return api.sendMessage(
+				"❌ Could not retrieve pending groups.\n" +
+				`Reason: ${error.message}`,
+				event.threadID
+			);
+		}
+	}
+};
